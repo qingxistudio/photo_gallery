@@ -21,9 +21,10 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
       let arguments = call.arguments as! Dictionary<String, AnyObject>
       let albumId = arguments["albumId"] as! String
       let mediumType = arguments["mediumType"] as! String
+      let mediumSubtype = arguments["mediumSubtype"] as? String
       let skip = arguments["skip"] as? NSNumber
       let take = arguments["take"] as? NSNumber
-      result(listMedia(albumId: albumId, skip: skip, take: take, mediumType: mediumType))
+      result(listMedia(albumId: albumId, skip: skip, take: take, mediumType: mediumType, mediumSubtype: mediumSubtype))
     }
     else if(call.method == "getMedium") {
       let arguments = call.arguments as! Dictionary<String, AnyObject>
@@ -99,7 +100,7 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
       albumIds.insert(albumId)
       
       let options = PHFetchOptions()
-      options.predicate = self.predicateFromMediumType(mediumType: mediumType)
+      options.predicate = self.predicateFromMediumType(mediumType: mediumType, mediumSubtype: nil)
       if #available(iOS 9, *) {
         fetchOptions.fetchLimit = 1
       }
@@ -164,10 +165,10 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
     return PHAsset.fetchAssets(in: collection!, options: options).count
   }
   
-  private func listMedia(albumId: String, skip: NSNumber?, take: NSNumber?, mediumType: String) -> NSDictionary {
+  private func listMedia(albumId: String, skip: NSNumber?, take: NSNumber?, mediumType: String, mediumSubtype: String?) -> NSDictionary {
     let fetchOptions = PHFetchOptions()
     fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-    fetchOptions.predicate = predicateFromMediumType(mediumType: mediumType)
+    fetchOptions.predicate = predicateFromMediumType(mediumType: mediumType, mediumSubtype: mediumSubtype)
     
     let collection = self.assetCollections.first(where: { (collection) -> Bool in
       collection.localIdentifier == albumId
@@ -262,7 +263,7 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
     let manager = PHImageManager.default()
     let fetchOptions = PHFetchOptions()
     if (mediumType != nil) {
-      fetchOptions.predicate = self.predicateFromMediumType(mediumType: mediumType!)
+      fetchOptions.predicate = self.predicateFromMediumType(mediumType: mediumType!, mediumSubtype: nil)
     }
     fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
     if #available(iOS 9, *) {
@@ -430,15 +431,33 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
     }
   }
   
+  private func toSwiftMediumSubtype(value: String?) -> PHAssetMediaSubtype? {
+    switch value {
+    case "photoLive": return PHAssetMediaSubtype.photoLive
+    default: return nil
+    }
+  }
+  
+  private func toDartMediumSubtype(value: PHAssetMediaSubtype) -> String? {
+    switch value {
+    case PHAssetMediaSubtype.photoLive: return "photoLive"
+    default: return nil
+    }
+  }
+  
   private func predicateFromMediumTypes(mediumTypes: [String]) -> NSPredicate {
     let predicates = mediumTypes.map { (dartValue) -> NSPredicate in
-      return predicateFromMediumType(mediumType: dartValue)
+      return predicateFromMediumType(mediumType: dartValue, mediumSubtype: nil)
     }
     return NSCompoundPredicate(type: NSCompoundPredicate.LogicalType.or, subpredicates: predicates)
   }
   
-  private func predicateFromMediumType(mediumType: String) -> NSPredicate {
+  private func predicateFromMediumType(mediumType: String, mediumSubtype: String?) -> NSPredicate {
     let swiftType = toSwiftMediumType(value: mediumType)
-    return NSPredicate(format: "mediaType = %d", swiftType!.rawValue)
+    if let swiftSubtype = toSwiftMediumSubtype(value: mediumSubtype) {
+      return NSPredicate(format: "(mediaType = %d) AND ((mediaSubtype & %d) != 0)", swiftType!.rawValue, swiftSubtype.rawValue);
+    } else {
+      return NSPredicate(format: "mediaType = %d", swiftType!.rawValue)
+    }
   }
 }
