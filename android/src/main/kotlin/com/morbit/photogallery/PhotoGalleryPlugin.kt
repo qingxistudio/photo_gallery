@@ -144,6 +144,10 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
                     result.success(v)
                 })
             }
+            "clear" -> {
+                // Nothing to do, no file cached
+                result.success("")
+            }
             else -> result.notImplemented()
         }
     }

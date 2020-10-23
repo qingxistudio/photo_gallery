@@ -1,6 +1,7 @@
 library photogallery;
 
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -123,5 +124,9 @@ class PhotoGallery {
       'autoExtension': autoExtension,
     }) as String;
     return File(path);
+  }
+
+  static Future<Void> clear() async {
+    return _channel.invokeMethod('clear', {});
   }
 }
