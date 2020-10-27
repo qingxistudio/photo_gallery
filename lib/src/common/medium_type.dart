@@ -28,7 +28,6 @@ MediumType jsonToMediumType(String value) {
   }
 }
 
-
 enum MediumSubtype {
   iOSPhotoLive,
   animatedImage
@@ -51,6 +50,17 @@ MediumSubtype jsonToMediumSubtype(String value) {
       return MediumSubtype.iOSPhotoLive;
     case 'gif': // Use gif to search by mime in Android without convert
       return MediumSubtype.animatedImage;
+enum ContentMode {
+  aspectFill,
+  aspectFit,
+}
+
+String contentModeToString(ContentMode value) {
+  switch (value) {
+    case ContentMode.aspectFill:
+      return 'aspectFill';
+    case ContentMode.aspectFit:
+      return 'aspectFit';
     default:
       return null;
   }

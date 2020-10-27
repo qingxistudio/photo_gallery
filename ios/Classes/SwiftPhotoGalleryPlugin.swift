@@ -75,13 +75,45 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
       let mediumId = arguments["mediumId"] as! String
       let raw = arguments["raw"] as? Bool
       let autoExtension = arguments["autoExtension"] as? Bool
+      let width = (arguments["width"] as? Double) ?? 0
+      let height = (arguments["height"] as? Double) ?? 0
+      let contentMode = toSwiftImageContentType(value: arguments["contentMode"] as? String ?? "")
+      var targetSize = CGSize.zero
+      if width * height > 0 {
+        targetSize = CGSize.init(width: width, height: height)
+      }
+
       getFile(
         mediumId: mediumId,
         raw: raw ?? false,
         autoExtension: autoExtension ?? false,
+        targetSize: targetSize,
+        contentMode: contentMode ?? .aspectFit,
         completion: { (filepath: String?, error: Error?) -> Void in
           result(filepath?.replacingOccurrences(of: "file://", with: ""))
       })
+    }
+    else if(call.method == "getLivePhotoVideoFile") {
+      let arguments = call.arguments as! Dictionary<String, AnyObject>
+      let mediumId = arguments["mediumId"] as! String
+      let width = (arguments["width"] as? Double) ?? 0
+      let height = (arguments["height"] as? Double) ?? 0
+      let contentMode = toSwiftImageContentType(value: arguments["contentMode"] as? String ?? "")
+      var targetSize = CGSize.zero
+      if width * height > 0 {
+        targetSize = CGSize.init(width: width, height: height)
+      }
+      if #available(iOS 9.1, *) {
+        getLivePhotoVideoFile(
+          mediumId: mediumId,
+          targetSize: targetSize,
+          contentMode: contentMode ?? .aspectFit,
+          completion: { (filepath: String?, error: Error?) -> Void in
+            result(filepath?.replacingOccurrences(of: "file://", with: ""))
+          })
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
     }
     else if(call.method == "clear") {
       clearRootExportPath()
@@ -323,7 +355,13 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
     completion(nil , NSError(domain: "photo_gallery", code: 404, userInfo: nil))
   }
   
-  private func getFile(mediumId: String, raw: Bool, autoExtension: Bool, completion: @escaping (String?, Error?) -> Void) {
+  private func getFile(
+    mediumId: String,
+    raw: Bool,
+    autoExtension: Bool,
+    targetSize:CGSize,
+    contentMode: PHImageContentMode,
+    completion: @escaping (String?, Error?) -> Void) {
     let manager = PHImageManager.default()
     
     let fetchOptions = PHFetchOptions()
@@ -361,7 +399,11 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
                 if (dataUTType == kUTTypeGIF as String) {
                   dataToWrite = originalData
                 } else {
-                  guard let imageData = self.convertToImageData(originalData: originalData, utType: dataUTType) else {
+                  guard let imageData = self.convertToImageData(
+                          originalData: originalData,
+                          utType: dataUTType,
+                          targetSize: targetSize,
+                          contentMode: contentMode) else {
                     completion(nil, NSError(domain: "photo_gallery", code: 500, userInfo: nil))
                     return
                   }
@@ -404,6 +446,62 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
     }
   }
   
+  @available(iOS 9.1, *)
+  private func getLivePhotoVideoFile(
+    mediumId: String,
+    targetSize:CGSize,
+    contentMode: PHImageContentMode,
+    completion: @escaping (String?, Error?) -> Void) {
+    let manager = PHImageManager.default()
+    let fetchOptions = PHFetchOptions()
+    fetchOptions.fetchLimit = 1
+    
+    let assets: PHFetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [mediumId], options: fetchOptions)
+    guard assets.count > 0 else {
+      completion(nil, NSError(domain: "photo_gallery", code: 404, userInfo: nil))
+      return
+    }
+
+    let asset: PHAsset = assets[0]
+    let livePhotoRequestOptions = PHLivePhotoRequestOptions.init()
+    livePhotoRequestOptions.isNetworkAccessAllowed = true
+    manager.requestLivePhoto(for: asset,
+                             targetSize: targetSize,
+                             contentMode: contentMode,
+                             options: livePhotoRequestOptions) { (livePhoto, info) in
+      
+      guard let livePhoto = livePhoto else {
+        completion(nil, NSError(domain: "photo_gallery", code: 404, userInfo: nil))
+        return
+      }
+      let assetResources = PHAssetResource.assetResources(for: livePhoto)
+      var videoResource: PHAssetResource?
+      for subResource: PHAssetResource in assetResources {
+        if subResource.type == PHAssetResourceType.pairedVideo {
+          videoResource = subResource
+          break
+        }
+      }
+      guard let videoResourceToExport = videoResource else {
+        completion(nil, NSError(domain: "photo_gallery", code: 404, userInfo: nil))
+        return
+      }
+      
+      let videoFileURL = self.exportPathForAsset(asset: asset, ext: ".mov")
+      let options = PHAssetResourceRequestOptions()
+      options.isNetworkAccessAllowed = true
+      PHAssetResourceManager.default().writeData(for: videoResourceToExport,
+                                                 toFile: videoFileURL,
+                                                 options: options) { (err) in
+        if err == nil {
+          completion(videoFileURL.absoluteString, nil)
+        } else {
+          completion(nil, NSError(domain: "photo_gallery", code: 500, userInfo: nil))
+        }        
+      }
+    }
+  }
+  
   private func getMediumFromAsset(asset: PHAsset) -> [String: Any?] {
     
     var mimeType: String?
@@ -436,8 +534,8 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
   }
   
   /// Converts to JPEG/PNG/GIF, and keep EXIF data.
-  private func convertToImageData(originalData: Data, utType: String) -> Data? {
-    
+  private func convertToImageData(originalData: Data, utType: String, targetSize:CGSize, contentMode: PHImageContentMode) -> Data? {
+
     let originalSrc = CGImageSourceCreateWithData(originalData as CFData, nil)!
     let options = [kCGImageSourceShouldCache as String: kCFBooleanFalse]
     let originalMetadata = CGImageSourceCopyPropertiesAtIndex(originalSrc, 0, options as CFDictionary)
@@ -445,10 +543,12 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
     var compressedImageData: Data?
     if (utType == kUTTypePNG as String) {
       guard let image: UIImage = UIImage(data: originalData) else { return nil }
-      compressedImageData = image.pngData()
+      let newImage = imageWithImage(originImage: image, targetSize: targetSize, contentMode: contentMode)
+      compressedImageData = newImage.pngData()
     } else {
       guard let image: UIImage = UIImage(data: originalData) else { return nil }
-      compressedImageData = image.jpegData(compressionQuality: 1.0)
+      let newImage = imageWithImage(originImage: image, targetSize: targetSize, contentMode: contentMode)
+      compressedImageData = newImage.jpegData(compressionQuality: 1.0)
     }
     guard let imageData = compressedImageData else { return nil }
     
@@ -462,11 +562,65 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
     return data as Data
   }
   
+  private func sizeWith(originSize:CGSize, targetSize:CGSize, contentMode: PHImageContentMode) -> CGSize {
+    if (targetSize == CGSize.zero) {
+      return originSize
+    }
+    let originRatio = originSize.width / originSize.height
+    let targetSizeRatio = targetSize.width / targetSize.height
+    var newSize: CGSize
+    
+    if (targetSize.width >= originSize.width
+          && targetSize.height >= originSize.height) {
+      return originSize
+    }
+    
+    if ((originRatio*10).rounded() == (targetSizeRatio*10).rounded()) {
+      if (targetSize.width > originSize.width) {
+        return originSize
+      } else {
+        newSize = targetSize
+      }
+    } else if (targetSizeRatio > originRatio && contentMode == .aspectFit) {
+      let height = min(originSize.height, targetSize.height)
+      newSize = CGSize.init(width: originRatio * height, height: height)
+    } else {
+      let width = min(originSize.width, targetSize.width)
+      newSize = CGSize.init(width: width, height: width / originRatio)
+    }
+    return newSize
+  }
+
+
+  private func imageWithImage(originImage:UIImage, targetSize:CGSize, contentMode: PHImageContentMode) -> UIImage {
+      
+    let originSize = CGSize(width: originImage.size.width * originImage.scale,
+                            height: originImage.size.height * originImage.scale)
+    let newSize = sizeWith(originSize: originSize, targetSize: targetSize, contentMode: contentMode)
+    if (newSize == originSize) {
+      return originImage
+    }
+    
+    if #available(iOS 10.0, *) {
+      let renderer = UIGraphicsImageRenderer(size: newSize)
+      let newImage = renderer.image { _ in
+        originImage.draw(in: CGRect.init(origin: CGPoint.zero, size: newSize))
+      }
+      return newImage.withRenderingMode(originImage.renderingMode)
+    } else {
+      UIGraphicsBeginImageContextWithOptions(newSize, false, 0.0)
+      originImage.draw(in: CGRect.init(origin: .zero, size: newSize))
+      let newImage:UIImage = UIGraphicsGetImageFromCurrentImageContext() ?? originImage
+      UIGraphicsEndImageContext()
+      return newImage
+    }
+  }
+
   private func rootExportPath() -> URL {
     let paths = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
     let cacheFolder = paths[0].appendingPathComponent("photo_gallery")
     try! FileManager.default.createDirectory(at: cacheFolder, withIntermediateDirectories: true, attributes: nil)
-    return cacheFolder;
+    return cacheFolder
   }
   
   private func clearRootExportPath() {
@@ -516,6 +670,14 @@ public class SwiftPhotoGalleryPlugin: NSObject, FlutterPlugin {
     case "image": return PHAssetMediaType.image
     case "video": return PHAssetMediaType.video
     case "audio": return PHAssetMediaType.audio
+    default: return nil
+    }
+  }
+  
+  private func toSwiftImageContentType(value: String) -> PHImageContentMode? {
+    switch value {
+    case "aspectFill": return .aspectFill
+    case "aspectFit": return .aspectFit
     default: return nil
     }
   }

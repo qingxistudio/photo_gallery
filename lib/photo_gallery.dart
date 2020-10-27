@@ -110,11 +110,15 @@ class PhotoGallery {
   /// get medium file by medium id
   /// [raw]: return raw file data. Not configurable in Android, always true.
   /// [autoExtension]: jpg image file if false, jpg/png/gif if true. . Not configurable in Android, always true.
+  /// [targetSize] support PNG/JPEG image only, GIF is not supported
+  /// [contentMode] used with [targetSize] to get resized image
   static Future<File> getFile({
     @required String mediumId,
     MediumType mediumType,
     bool raw = false,
-    bool autoExtension = false
+    bool autoExtension = false,
+    Size targetSize,
+    ContentMode contentMode = ContentMode.aspectFit
   }) async {
     assert(mediumId != null);
     final path = await _channel.invokeMethod('getFile', {
@@ -122,6 +126,22 @@ class PhotoGallery {
       'mediumType': mediumTypeToJson(mediumType),
       'raw': raw,
       'autoExtension': autoExtension,
+      'width': targetSize?.width ?? 0,
+      'height': targetSize?.height ?? 0,
+      'contentMode': contentModeToString(contentMode)
+    }) as String;
+    return File(path);
+  }
+
+  /// extract video file from live photo
+  /// iOS only feature
+  static Future<File> getLivePhotoVideoFile(String mediumId, {Size size, ContentMode mode}) async {
+    assert(mediumId != null);
+    final path = await _channel.invokeMethod('getLivePhoneVideoFile', {
+      'mediumId': mediumId,
+      'width': size?.width ?? 0,
+      'height': size?.height ?? 0,
+      'contentMode': contentModeToString(mode)
     }) as String;
     return File(path);
   }
