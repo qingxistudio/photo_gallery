@@ -696,7 +696,7 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
             try {
                 val lowerMIME = mime.toLowerCase()
                 val compressFormat = if (lowerMIME == "image/png") Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
-                val imageFile = File(cacheDirPath + File.separator + "${filenameMD5Str}_${originFile.name}")
+                val imageFile = File(cacheDirPath + File.separator + "${filenameMD5Str}_${reqSize.width}_${reqSize.height}_${originFile.name}")
                 imageFile.createNewFile()
                 val out = FileOutputStream(imageFile);
                 scaledBitmap.compress(compressFormat, 100, out);
@@ -710,6 +710,17 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
         } else {
             return imgOriginPath
         }
+    }
+
+    private fun getCopied(imgOriginPath: String): String {
+        val pluginCacheDir = context?.getDir(PhotoGalleryPluginImageCacheDir, Context.MODE_PRIVATE)
+        val cacheDirPath = pluginCacheDir?.absolutePath
+        val filenameMD5 = MessageDigest.getInstance("MD5").digest(imgOriginPath.toByteArray())
+        val filenameMD5Str = String(filenameMD5)
+        val originFile = File(imgOriginPath)
+        val imageFile = File(cacheDirPath + File.separator + "${filenameMD5Str}_raw_${originFile.name}")
+        originFile.copyTo(imageFile, overwrite = true)
+        return imageFile.absolutePath
     }
 
     private fun getImageFile(mediumId: String, reqWidth: Int, reqHeight: Int, contentMode: String): String? {
@@ -726,10 +737,8 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
 
             imageCursor?.use { cursor ->
                 if (cursor.moveToNext()) {
-
                     val dataColumn = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
                     val imgOriginPath =  cursor.getString(dataColumn)
-
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                         val widthColumn = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
                         val heightColumn = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
@@ -747,6 +756,9 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
                         }
                     } else {
                         path =  imgOriginPath
+                    }
+                    if (path == imgOriginPath) {
+                        path = getCopied(imgOriginPath)
                     }
                 }
             }
