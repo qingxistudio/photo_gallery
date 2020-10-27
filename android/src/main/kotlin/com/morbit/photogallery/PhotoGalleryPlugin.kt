@@ -25,6 +25,8 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import kotlin.math.roundToInt
 
+const val PhotoGalleryPluginImageCacheDir = "photo_gallery_plugin"
+
 /** PhotoGalleryPlugin */
 class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
@@ -155,6 +157,8 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
                 })
             }
             "clear" -> {
+                val pluginCacheDir = context?.getDir(PhotoGalleryPluginImageCacheDir, Context.MODE_PRIVATE)
+                pluginCacheDir?.deleteRecursively()
                 // Nothing to do, no file cached
                 result.success("")
             }
@@ -388,8 +392,8 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
                                         buckIDKey: String = MediaStore.Images.Media.BUCKET_ID,
                                         mediumSubtype: String?,
                                         mimeTypeKey : String = MediaStore.Images.Media.MIME_TYPE): Array<MutableList<String>>  {
-        var selectionConditions = mutableListOf<String>()
-        var selectionArgs = mutableListOf<String>()
+        val selectionConditions = mutableListOf<String>()
+        val selectionArgs = mutableListOf<String>()
         if (albumId != allAlbumId) {
             selectionConditions.add(element = "$buckIDKey = ?")
             selectionArgs.add(element = albumId)
@@ -683,7 +687,7 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
         }
 
         val scaledBitmap = Bitmap.createScaledBitmap(bitmap, reqSize.width, reqSize.height, false)
-        val pluginCacheDir = context?.getDir("photo_gallery_plugin", Context.MODE_PRIVATE)
+        val pluginCacheDir = context?.getDir(PhotoGalleryPluginImageCacheDir, Context.MODE_PRIVATE)
         val cacheDirPath = pluginCacheDir?.absolutePath
         if (pluginCacheDir != null && cacheDirPath != null) {
             val originFile = File(imgOriginPath)
