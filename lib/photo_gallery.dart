@@ -126,8 +126,8 @@ class PhotoGallery {
       'mediumType': mediumTypeToJson(mediumType),
       'raw': raw,
       'autoExtension': autoExtension,
-      'width': targetSize?.width ?? 0,
-      'height': targetSize?.height ?? 0,
+      'width': targetSize?.width?.toInt() ?? 0,
+      'height': targetSize?.height?.toInt() ?? 0,
       'contentMode': contentModeToString(contentMode)
     }) as String;
     return File(path);

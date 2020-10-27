@@ -14,10 +14,16 @@ import android.provider.MediaStore
 import android.content.Context
 import android.database.Cursor
 import android.database.Cursor.FIELD_TYPE_INTEGER
+import android.graphics.BitmapFactory
 import android.os.AsyncTask
 import android.os.Build
 import android.util.Size
 import android.webkit.MimeTypeMap
+import androidx.annotation.RequiresApi
+import java.io.File
+import java.io.FileOutputStream
+import java.security.MessageDigest
+import kotlin.math.roundToInt
 
 /** PhotoGalleryPlugin */
 class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
@@ -138,8 +144,12 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
             "getFile" -> {
                 val mediumId = call.argument<String>("mediumId")
                 val mediumType = call.argument<String>("mediumType")
+                val width = call.argument<Int>("width")
+                val height = call.argument<Int>("height")
+                val contentMode = call.argument<String>("contentMode")
+
                 BackgroundAsyncTask({
-                    getFile(mediumId!!, mediumType)
+                    getFile(mediumId!!, mediumType, width?:0, height?:0, contentMode?:"")
                 }, { v ->
                     result.success(v)
                 })
@@ -595,21 +605,110 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
         }
     }
 
-    private fun getFile(mediumId: String, mediumType: String?): String? {
+    private fun getFile(mediumId: String, mediumType: String?, width: Int, height: Int, contentMode: String): String? {
         return when (mediumType) {
             imageType -> {
-                getImageFile(mediumId)
+                getImageFile(mediumId, width, height, contentMode)
             }
             videoType -> {
                 getVideoFile(mediumId)
             }
             else -> {
-                getImageFile(mediumId) ?: getVideoFile(mediumId)
+                getImageFile(mediumId, width, height, contentMode) ?: getVideoFile(mediumId)
             }
         }
     }
 
-    private fun getImageFile(mediumId: String): String? {
+    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+    private fun getImageSize(originSize: Size, targetSize: Size, contentMode: String): Size {
+        if (targetSize.width * targetSize.height == 0) {
+            return originSize
+        }
+        val originRatio = originSize.width * 1.0 / originSize.height
+        val targetSizeRatio = targetSize.width * 1.0 / targetSize.height
+        var newSize: Size
+        if (targetSize.width >= originSize.width
+              && targetSize.height >= originSize.height) {
+          return originSize
+        }
+        if ((originRatio*10).roundToInt() == (targetSizeRatio*10).roundToInt()) {
+          if (targetSize.width > originSize.width) {
+            return originSize
+          } else {
+            newSize = targetSize
+          }
+        } else if (targetSizeRatio > originRatio && contentMode == "aspectFit") {
+          val height = Math.min(originSize.height, targetSize.height)
+          newSize = Size((originRatio * height).toInt(), height)
+        } else {
+          val width = Math.min(originSize.width, targetSize.width)
+          newSize = Size(width, (width / originRatio).toInt())
+        }
+        return newSize
+    }
+
+
+    private fun calculateInSampleSize(height: Int, width: Int, reqWidth: Int, reqHeight: Int): Int {
+
+        var inSampleSize = 1
+
+        if (height > reqHeight || width > reqWidth) {
+
+            val halfHeight: Int = height / 2
+            val halfWidth: Int = width / 2
+
+            // Calculate the largest inSampleSize value that is a power of 2 and keeps both
+            // height and width larger than the requested height and width.
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
+    }
+
+
+    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+    private fun getScaledImagePath(imgOriginPath: String, mime: String, reqSize: Size, rawSize: Size): String {
+        if (reqSize.width <= rawSize.width) {
+            return imgOriginPath
+        }
+        val inSampleSizeToUse = calculateInSampleSize(rawSize.width, rawSize.height, reqSize.width, reqSize.height)
+
+        val bitmap = BitmapFactory.Options().run {
+            // Calculate inSampleSize
+            inSampleSize = inSampleSizeToUse
+            // Decode bitmap with inSampleSize set
+            inJustDecodeBounds = false
+            BitmapFactory.decodeFile(imgOriginPath, this)
+        }
+
+        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, reqSize.width, reqSize.height, false)
+        val pluginCacheDir = context?.getDir("photo_gallery_plugin", Context.MODE_PRIVATE)
+        val cacheDirPath = pluginCacheDir?.absolutePath
+        if (pluginCacheDir != null && cacheDirPath != null) {
+            val originFile = File(imgOriginPath)
+            val filenameMD5 = MessageDigest.getInstance("MD5").digest(imgOriginPath.toByteArray())
+            val filenameMD5Str = String(filenameMD5)
+            try {
+                val lowerMIME = mime.toLowerCase()
+                val compressFormat = if (lowerMIME == "image/png") Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+                val imageFile = File(cacheDirPath + File.separator + "${filenameMD5Str}_${originFile.name}")
+                imageFile.createNewFile()
+                val out = FileOutputStream(imageFile);
+                scaledBitmap.compress(compressFormat, 100, out);
+                out.flush();
+                out.close();
+                return imageFile.absolutePath
+            } catch (e: Exception) {
+                assert(false)
+                return imgOriginPath
+            }
+        } else {
+            return imgOriginPath
+        }
+    }
+
+    private fun getImageFile(mediumId: String, reqWidth: Int, reqHeight: Int, contentMode: String): String? {
         var path: String? = null
 
         this.context?.run {
@@ -623,8 +722,28 @@ class PhotoGalleryPlugin : FlutterPlugin, MethodCallHandler {
 
             imageCursor?.use { cursor ->
                 if (cursor.moveToNext()) {
+
                     val dataColumn = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
-                    path = cursor.getString(dataColumn)
+                    val imgOriginPath =  cursor.getString(dataColumn)
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        val widthColumn = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+                        val heightColumn = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+                        val width = cursor.getInt(widthColumn)
+                        val height = cursor.getInt(heightColumn)
+                        val originSize = Size(width, height)
+                        val rawSize = Size(reqWidth, reqHeight)
+                        val newSize = getImageSize(originSize, Size(reqWidth, reqHeight), contentMode)
+                        if (newSize == originSize) {
+                            path = imgOriginPath
+                        } else {
+                            val mimeColumn = cursor.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
+                            val mime = cursor.getString(mimeColumn)
+                            path = getScaledImagePath(imgOriginPath, mime, newSize, rawSize)
+                        }
+                    } else {
+                        path =  imgOriginPath
+                    }
                 }
             }
         }
